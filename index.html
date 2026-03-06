@@ -371,6 +371,7 @@
       </div>
       <button class="srt-btn on" id="sb-date" onclick="setSort('date')">날짜순</button>
       <button class="srt-btn"    id="sb-code" onclick="setSort('code')">코드순</button>
+      <button class="srt-btn" id="btn-kakao" onclick="openKakaoModal()" style="margin-left:auto;background:var(--blu);border-color:var(--blu);color:white;">💬 카톡 생성</button>
     </div>
     <div class="meta-bar">
       <div style="display:flex;align-items:center;gap:8px;">
@@ -393,6 +394,23 @@
     <div id="list"></div>
   </div>
 </main>
+
+<!-- 카톡 모달 -->
+<div id="kakao-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;align-items:center;justify-content:center;">
+  <div id="kakao-modal-box" style="background:white;border-radius:12px;width:520px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.18);position:relative;">
+    <div id="kakao-modal-header" style="padding:18px 20px 14px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;cursor:grab;user-select:none;">
+      <div style="font-weight:800;font-size:15px;color:var(--t1);">💬 카톡 출고 공지 생성</div>
+      <button onclick="closeKakaoModal()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t3);">✕</button>
+    </div>
+    <div style="padding:14px 20px;flex:1;overflow-y:auto;">
+      <textarea id="kakao-text" style="width:100%;height:340px;border:1px solid var(--bd);border-radius:8px;padding:12px;font-size:12px;font-family:'Malgun Gothic',sans-serif;line-height:1.7;resize:none;color:var(--t1);background:var(--bg3);" readonly></textarea>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--bd);display:flex;gap:8px;justify-content:flex-end;">
+      <button class="copy-btn" onclick="copyKakao()" style="padding:8px 20px;background:var(--blu);border:none;border-radius:6px;color:white;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">📋 복사</button>
+      <button onclick="closeKakaoModal()" style="padding:8px 16px;background:none;border:1px solid var(--bd);border-radius:6px;color:var(--t3);font-family:inherit;font-size:13px;cursor:pointer;">닫기</button>
+    </div>
+  </div>
+</div>
 
 <script>
 let D = null;
@@ -430,6 +448,14 @@ function parse(ws) {
   const fm={};
   for(let c=0;c<grps[0].sc;c++){ const v=cell(0,c); if(v) fm[String(v).trim()]=c; }
   const C현재고=fm['현재고']??5, C출잔=fm['출잔']??7;
+  // 단품명칭 열: 전체 행 탐색
+  let C명칭=-1;
+  outer2: for(let r=0;r<=Math.min(mR,5);r++){
+    for(let c=0;c<=mC;c++){
+      const v=cell(r,c);
+      if(v && String(v).trim()==='단품명칭'){ C명칭=c; break outer2; }
+    }
+  }
   // 포장라인 열: 모든 행/열 탐색
   let C라인=-1;
   outer: for(let r=0;r<=Math.min(mR,5);r++){
@@ -448,7 +474,8 @@ function parse(ws) {
     if(!tl.some(t=>t.예량<0)) continue;
     const 라인=(C라인>=0&&cell(r,C라인))?String(cell(r,C라인)).trim():'';
     const 총출고=base.reduce((s,b)=>s+(Number(b.출예)||0),0);
-    items.push({code:String(code),color:color?String(color):'',현재고,출잔,base,first:tl.find(t=>t.예량<0)?.date??'',line:라인,총출고});
+    const 명칭=(C명칭>=0&&cell(r,C명칭))?String(cell(r,C명칭)).trim():'';
+    items.push({code:String(code),color:color?String(color):'',현재고,출잔,base,first:tl.find(t=>t.예량<0)?.date??'',line:라인,총출고,명칭});
   }
   const lines=[...new Set(items.map(it=>it.line).filter(Boolean))].sort();
   return {dates:grps.map(g=>g.date), items, totalRows:mR-1, lines};
@@ -856,6 +883,205 @@ function refreshRow(k){
   const neo = buildRow(D.items.find(it => key(it) === k), wasOpen);
   cont.replaceChild(neo, old);
 }
+
+// ── 카톡 출고 공지 생성 ──────────────────────────────────────────────────
+function getSize(code){
+  const c = code.toUpperCase();
+  if(/0180/.test(c))  return 'KK';
+  if(/0165/.test(c))  return 'K';
+  if(/0150/.test(c))  return 'Q';
+  if(/0140/.test(c))  return 'D';
+  if(/0110/.test(c))  return 'SS';
+  if(/090|0100/.test(c)) return 'S';
+  const m = c.match(/\d{2,4}/g);
+  if(m) for(const n of m){
+    const i = parseInt(n);
+    if(i===180||i===1800) return 'KK';
+    if(i===165||i===1650) return 'K';
+    if(i===150||i===1500) return 'Q';
+    if(i===140||i===1400) return 'D';
+    if(i===110||i===1100) return 'SS';
+    if(i===90||i===900||i===100||i===1000) return 'S';
+  }
+  return '';
+}
+
+function addBusinessDays(dateStr, days){
+  const d = new Date(dateStr);
+  let remaining = Math.abs(days);
+  const dir = days < 0 ? -1 : 1;
+  while(remaining > 0){
+    d.setDate(d.getDate() + dir);
+    const dow = d.getDay();
+    if(dow !== 6 && dow !== 0) remaining--; // 토(6), 일(0) 건너뜀
+  }
+  return d;
+}
+
+function fmtDateKo(d){
+  const days = ['일','월','화','수','목','금','토'];
+  return (d.getMonth()+1)+'/'+d.getDate()+'('+days[d.getDay()]+')';
+}
+
+function businessDayDiff(fromStr, toStr){
+  let d = new Date(fromStr), cnt = 0;
+  const t = new Date(toStr);
+  while(d < t){
+    d.setDate(d.getDate()+1);
+    const dow = d.getDay();
+    if(dow !== 6 && dow !== 0) cnt++; // 토(6), 일(0) 제외
+  }
+  return cnt;
+}
+
+function trimName(n){
+  // 제거할 단어 목록
+  const removes = [
+    'iloom', '일룸', '슬로우베드', '헤이븐', '매트리스부', '매트리스',
+    '(2026 프로모션)', '2026 프로모션', '프로모션',
+    '( 전용, 단독사용 불가)', '전용, 단독사용 불가',
+    '[전달]', '(내작)', '내작',
+    '[전달/택배]', '새니타이즈', '트와일라잇', '싱글', '침대',
+  ];
+  let s = n;
+  for(const r of removes) s = s.split(r).join('');
+  // 연속 공백 정리
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+function openKakaoModal(){
+  const text = genKakao();
+  document.getElementById('kakao-text').value = text;
+  document.getElementById('kakao-modal').style.display = 'flex';
+}
+
+function closeKakaoModal(){
+  document.getElementById('kakao-modal').style.display = 'none';
+}
+
+function copyKakao(){
+  const ta = document.getElementById('kakao-text');
+  ta.select();
+  document.execCommand('copy');
+  const btn = document.querySelector('#kakao-modal .copy-btn');
+  btn.textContent = '✅ 복사됨!';
+  setTimeout(()=>{ btn.textContent='📋 복사'; }, 2000);
+}
+
+function genKakao(){
+  if(!D) return '';
+  const byDate = {};
+
+  D.items.forEach(it => {
+    const ex = extras[key(it)] || {};
+    const tl = calcTL(it.현재고, it.출잔, it.base, ex);
+    const floor = it.line === '포장1(스프링)' ? '2층' : '4층';
+    const name  = trimName(it.명칭 || it.code);
+
+    // 오늘 기준 계산
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const todayStr = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+
+    // 날짜별 실제 출예량(당일 나가는 양) 기준으로 출고키별 합산
+    const qtyByKey = {}; // 출고키 → 수량 합계
+
+    for(const {date, 예량} of tl){
+      if(예량 >= 0) continue;
+      const dow = new Date(date).getDay();
+      if(dow === 6) continue; // 토요일 스킵
+
+      // 당일 실제 출예량 찾기
+      const baseDay = it.base.find(b => b.date === date);
+      const 출예 = baseDay ? (Number(baseDay.출예)||0) : 0;
+      if(출예 <= 0) continue; // 출예가 없는 날은 스킵 (누적만 된 날)
+
+      let 출고일 = addBusinessDays(date, -2);
+      let 출고일str = 출고일.toISOString().slice(0,10);
+      const diff = businessDayDiff(출고일str, date);
+      let ampm = diff <= 1 ? '오전' : '오후';
+
+      if(출고일str < todayStr){
+        출고일str = todayStr;
+        ampm = '오전';
+      }
+
+      const 출고키 = 출고일str + '_' + ampm;
+      qtyByKey[출고키] = (qtyByKey[출고키]||0) + 출예;
+    }
+
+    // 최대 3개 출고키만 사용
+    const sortedOutKeys = Object.keys(qtyByKey).sort().slice(0,3);
+    sortedOutKeys.forEach(출고키 => {
+      const [출고일str, ampm] = 출고키.split('_');
+      const 출고일 = new Date(출고일str);
+      if(!byDate[출고키]) byDate[출고키] = {'2층':[], '4층':[]};
+      byDate[출고키][floor].push({
+        code: it.code, name,
+        qty: Math.round(qtyByKey[출고키]),
+        출고일, ampm
+      });
+    });
+  });
+
+  const sortedKeys = Object.keys(byDate).sort();
+  let lines2 = [], lines4 = [];
+
+  sortedKeys.forEach(k => {
+    const [dateStr, ampm] = k.split('_');
+    const d = new Date(dateStr);
+    const label = fmtDateKo(d) + ' ' + ampm + ' 출고';
+    ['2층','4층'].forEach(floor => {
+      const arr = byDate[k][floor];
+      if(!arr.length) return;
+      const block = label + '\n' + arr.map(it =>
+        `${it.code} ${it.name} ${it.qty}개`
+      ).join('\n');
+      if(floor === '2층') lines2.push(block);
+      else lines4.push(block);
+    });
+  });
+
+  let result = '';
+  if(lines2.length){ result += '2층 출고분\n' + lines2.join('\n\n') + '\n'; }
+  if(lines4.length){ if(result) result += '\n'; result += '4층 출고분\n' + lines4.join('\n\n'); }
+  return result || '부족 품목이 없습니다.';
+}
+
+
+// 카톡 모달 드래그
+(function(){
+  let isDragging=false, startX, startY, origLeft, origTop;
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const header = document.getElementById('kakao-modal-header');
+    const box    = document.getElementById('kakao-modal-box');
+    if(!header||!box) return;
+    header.addEventListener('mousedown', e=>{
+      isDragging=true;
+      const rect = box.getBoundingClientRect();
+      startX=e.clientX; startY=e.clientY;
+      origLeft=rect.left; origTop=rect.top;
+      box.style.position='fixed';
+      box.style.margin='0';
+      box.style.left=origLeft+'px';
+      box.style.top=origTop+'px';
+      document.getElementById('kakao-modal').style.alignItems='unset';
+      document.getElementById('kakao-modal').style.justifyContent='unset';
+      header.style.cursor='grabbing';
+    });
+    document.addEventListener('mousemove', e=>{
+      if(!isDragging) return;
+      const dx=e.clientX-startX, dy=e.clientY-startY;
+      box.style.left=(origLeft+dx)+'px';
+      box.style.top=(origTop+dy)+'px';
+    });
+    document.addEventListener('mouseup', ()=>{
+      isDragging=false;
+      if(header) header.style.cursor='grab';
+    });
+  });
+})();
 
 // drag & drop
 const uz=document.getElementById('upload-zone');
