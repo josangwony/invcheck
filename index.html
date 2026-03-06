@@ -43,7 +43,7 @@
   }
 
   /* ── HEADER ── */
-  header {
+  header { position: sticky; top: 0; z-index: 100;
     position: sticky; top: 0; z-index: 100;
     background: var(--hdr);
     height: 58px;
@@ -79,7 +79,7 @@
   .btn-reset:hover { background: var(--blu-l); border-color: var(--blu); color: var(--blu); }
 
   /* ── MAIN ── */
-  main { max-width: 1360px; margin: 0 auto; padding: 36px 32px; }
+  main { max-width: 1360px; margin: 0 auto; padding: 20px 32px; }
 
   /* ── UPLOAD ── */
   #upload-zone {
@@ -307,6 +307,22 @@
   }
   .line-btn.on  { background: var(--blu); border-color: var(--blu); color: #fff; }
   .line-btn:hover:not(.on) { border-color: var(--blu); color: var(--blu); }
+
+  .sticky-controls {
+    position: sticky;
+    top: 56px; /* 헤더 높이 */
+    z-index: 90;
+    background: var(--bg);
+    padding-bottom: 4px;
+  }
+
+  .meta-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px;
+    padding: 8px 14px; margin-bottom: 12px;
+    background: var(--bg2); border: 1px solid var(--bd);
+    border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
 </style>
 </head>
 <body>
@@ -346,6 +362,7 @@
 
   <div id="sec-res" style="display:none">
     <div class="ribbon" id="ribbon"></div>
+    <div class="sticky-controls">
     <div class="ribbon" id="line-filters" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;"></div>
     <div class="controls">
       <div class="srch-wrap">
@@ -355,16 +372,23 @@
       <button class="srt-btn on" id="sb-date" onclick="setSort('date')">날짜순</button>
       <button class="srt-btn"    id="sb-code" onclick="setSort('code')">코드순</button>
     </div>
-    <div class="meta"><div class="meta-dot"></div><span id="meta-t"></span></div>
-
-    <!-- 범례 -->
-    <div class="hmap-legend" style="margin-bottom:12px;padding:10px 14px;background:white;border:1px solid var(--bd);border-radius:7px;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
-      <span style="font-size:11px;color:var(--t3);font-weight:600;letter-spacing:1px;margin-right:4px">날짜별 재고 상태</span>
-      <div class="leg"><div class="leg-dot" style="background:#f0faf5;border-color:#a8e0c0"></div>정상</div>
-      <div class="leg"><div class="leg-dot" style="background:#ffe8e5;border-color:#f0a898"></div>부족 발생</div>
-      <div class="leg"><div class="leg-dot" style="background:#e6f8ef;border-color:#80cc9c"></div>시뮬 후 해소</div>
-      <div class="leg" style="margin-left:4px"><div style="width:8px;height:8px;border-radius:50%;background:var(--grn);border:1.5px solid white;box-shadow:0 0 0 1px var(--grn);display:inline-block;margin-right:4px"></div>추가생산 입력됨</div>
+    <div class="meta-bar">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="meta-dot"></div>
+        <span id="meta-t"></span>
+        <span style="color:var(--bd2);margin:0 4px;">|</span>
+        <span style="font-size:10px;color:var(--t4);font-weight:600;letter-spacing:1px;">분석기간</span>
+        <span id="meta-dates" style="font-size:10px;color:var(--t3);font-family:'Consolas','Courier New',monospace;"></span>
+      </div>
+      <div class="hmap-legend">
+        <span style="font-size:10px;color:var(--t4);font-weight:600;letter-spacing:1px;margin-right:2px;">재고상태</span>
+        <div class="leg"><div class="leg-dot" style="background:#f0faf5;border-color:#a8e0c0"></div>정상</div>
+        <div class="leg"><div class="leg-dot" style="background:#ffe8e5;border-color:#f0a898"></div>부족 발생</div>
+        <div class="leg"><div class="leg-dot" style="background:#e6f8ef;border-color:#80cc9c"></div>시뮬 후 해소</div>
+        <div class="leg"><div style="width:8px;height:8px;border-radius:50%;background:var(--grn);border:1.5px solid white;box-shadow:0 0 0 1px var(--grn);display:inline-block;margin-right:4px"></div>추가생산 입력됨</div>
+      </div>
     </div>
+    </div><!-- /sticky-controls -->
 
     <div id="list"></div>
   </div>
@@ -423,7 +447,8 @@ function parse(ws) {
     const tl=calcTL(현재고,출잔,base,{});
     if(!tl.some(t=>t.예량<0)) continue;
     const 라인=(C라인>=0&&cell(r,C라인))?String(cell(r,C라인)).trim():'';
-    items.push({code:String(code),color:color?String(color):'',현재고,출잔,base,first:tl.find(t=>t.예량<0)?.date??'',line:라인});
+    const 총출고=base.reduce((s,b)=>s+(Number(b.출예)||0),0);
+    items.push({code:String(code),color:color?String(color):'',현재고,출잔,base,first:tl.find(t=>t.예량<0)?.date??'',line:라인,총출고});
   }
   const lines=[...new Set(items.map(it=>it.line).filter(Boolean))].sort();
   return {dates:grps.map(g=>g.date), items, totalRows:mR-1, lines};
@@ -461,9 +486,12 @@ function showRes(){
   document.getElementById('st-total').textContent=D.totalRows.toLocaleString();
   document.getElementById('st-lack').textContent=D.items.length.toLocaleString();
   document.getElementById('st-days').textContent=D.dates.length+'일';
-  const rib=document.getElementById('ribbon');
-  rib.innerHTML='<span class="ribbon-lbl">분석 기간</span>'+
-    D.dates.map((d,i)=>`<span class="d-chip${i===0?' first':''}">${fmt(d)}</span>`).join('');
+  // 분석기간 → meta-dates에 텍스트로 표시, ribbon 숨김
+  document.getElementById('ribbon').style.display='none';
+  const md=document.getElementById('meta-dates');
+  if(md && D.dates.length){
+    md.textContent = fmt(D.dates[0])+' ~ '+fmt(D.dates[D.dates.length-1])+' ('+D.dates.length+'일)';
+  }
   renderLineFilters();
   render();
 }
@@ -586,7 +614,7 @@ function buildRow(it,open){
         ${it.color?`<div class="r-color">${it.color}</div>`:''}
       </div>
       <div><div class="r-lbl">현재고</div><div class="r-val">${it.현재고.toLocaleString()}</div></div>
-      <div><div class="r-lbl">출잔</div><div class="r-val">${it.출잔.toLocaleString()}</div></div>
+      <div><div class="r-lbl">총출고</div><div class="r-val">${it.총출고.toLocaleString()}</div></div>
       <div><div class="r-fd-lbl">최초 부족일</div><div class="r-fd">${fdHtml}</div></div>
       <div class="hmap-wrap">
         <div class="hmap-label">${lblRow}</div>
