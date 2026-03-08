@@ -1018,33 +1018,28 @@ function genKakao(){
       dayPlan.push({date, 출예, 출고키: 출고일str+'_'+ampm, 출고일str, ampm});
     }
 
-    // 재고 흐름 재시뮬: 출고키순으로 생산 결정 후 이후 날짜 재고에 반영
+    // 재고 흐름 재시뮬: 출고키순으로 실제 부족분(출예 - 재고 커버분) 계산
     const sortedPlanKeys = [...new Set(dayPlan.map(d=>d.출고키))].sort();
     const qtyByKey = {};
-
-    // 날짜별 출예량 맵
-    const 출예맵 = {};
-    it.base.forEach(b => { 출예맵[b.date] = Number(b.출예)||0; });
-
-    // extras 포함한 현재 재고 시뮬 상태 복사
-    // 각 출고키 처리 시점에서 "이 출고일에 얼마 생산하면 D-day까지 버티나" 계산
-    // 방법: 출고키별 D-day 날짜들의 예량을 누적 생산분 반영해서 재계산
     let 누적생산 = 0;
 
     sortedPlanKeys.forEach(출고키 => {
       const 해당Days = dayPlan.filter(d => d.출고키 === 출고키).sort((a,b)=>a.date.localeCompare(b.date));
-      // 이 출고키의 D-day 날짜들에서 누적생산 반영 후 부족량 합산
       let 실부족 = 0;
       해당Days.forEach(({date}) => {
         const tlDay = tl.find(t => t.date === date);
         if(!tlDay) return;
-        // 누적생산이 반영된 예량
+        // 누적생산 반영 후 예량
         const 보정예량 = tlDay.예량 + 누적생산;
-        if(보정예량 < 0) 실부족 += tlDay.출예; // 여전히 부족하면 출예만큼 필요
+        if(보정예량 < 0){
+          // 출예 중 재고로 커버 안 되는 분만
+          const 커버가능 = Math.max(0, tlDay.출예 + 보정예량); // 재고로 커버되는 양
+          실부족 += tlDay.출예 - 커버가능;
+        }
       });
       if(실부족 > 0){
-        qtyByKey[출고키] = 실부족;
-        누적생산 += 실부족; // 이 출고키에서 만든 분이 이후에 반영
+        qtyByKey[출고키] = Math.round(실부족);
+        누적생산 += 실부족;
       }
     });
 
