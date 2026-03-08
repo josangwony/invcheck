@@ -428,7 +428,7 @@ function calcTL(현재고, 출잔, base, ex) {
     const b = Number(ex&&ex[date])||0;
     const v = i===0 ? 현재고-출잔-출예+b : prev-출예+b;
     const r = Math.round(v*100)/100;
-    prev=r; return {date,예량:r};
+    prev=r; return {date, 예량:r, 출예: Number(출예)||0, 추가생산: b};
   });
 }
 
@@ -907,13 +907,18 @@ function getSize(code){
 }
 
 function addBusinessDays(dateStr, days){
-  const d = new Date(dateStr);
+  const [y,m,dd] = dateStr.split('-');
+  const d = new Date(+y, +m-1, +dd);
   let remaining = Math.abs(days);
   const dir = days < 0 ? -1 : 1;
   while(remaining > 0){
     d.setDate(d.getDate() + dir);
     const dow = d.getDay();
-    if(dow !== 6 && dow !== 0) remaining--; // 토(6), 일(0) 건너뜀
+    if(dow !== 6 && dow !== 0) remaining--;
+  }
+  // 결과가 주말이면 가장 가까운 평일로 보정
+  while(d.getDay() === 0 || d.getDay() === 6){
+    d.setDate(d.getDate() + (days < 0 ? -1 : 1));
   }
   return d;
 }
@@ -924,12 +929,14 @@ function fmtDateKo(d){
 }
 
 function businessDayDiff(fromStr, toStr){
-  let d = new Date(fromStr), cnt = 0;
-  const t = new Date(toStr);
+  // UTC 파싱 오류 방지: 로컬 날짜로 직접 파싱
+  const parseLocal = s => { const [y,m,d] = s.split('-'); return new Date(+y, +m-1, +d); };
+  let d = parseLocal(fromStr), cnt = 0;
+  const t = parseLocal(toStr);
   while(d < t){
     d.setDate(d.getDate()+1);
     const dow = d.getDay();
-    if(dow !== 6 && dow !== 0) cnt++; // 토(6), 일(0) 제외
+    if(dow !== 6 && dow !== 0) cnt++;
   }
   return cnt;
 }
@@ -984,44 +991,79 @@ function genKakao(){
     today.setHours(0,0,0,0);
     const todayStr = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
 
-    // 날짜별 실제 출예량(당일 나가는 양) 기준으로 출고키별 합산
-    const qtyByKey = {}; // 출고키 → 수량 합계
-
+    // 카톡 내부 누적 시뮬: 앞 출고일 생산량이 이후 재고에 반영
+    // 각 날짜별 출예량과 출고키 매핑
+    const dayPlan = []; // {date, 출예, 출고키, 출고일str, ampm}
     for(const {date, 예량} of tl){
-      if(예량 >= 0) continue;
+      if(예량 >= 0) continue; // 부족한 날짜만
       const dow = new Date(date).getDay();
-      if(dow === 6) continue; // 토요일 스킵
-
-      // 당일 실제 출예량 찾기
-      const baseDay = it.base.find(b => b.date === date);
-      const 출예 = baseDay ? (Number(baseDay.출예)||0) : 0;
-      if(출예 <= 0) continue; // 출예가 없는 날은 스킵 (누적만 된 날)
+      if(dow === 6) continue;
+      // tl에서 직접 가져와야 extras(추가생산) 반영됨
+      const tlDay = tl.find(t => t.date === date);
+      const 출예 = tlDay ? tlDay.출예 : 0;
+      if(출예 <= 0) continue;
 
       let 출고일 = addBusinessDays(date, -2);
-      let 출고일str = 출고일.toISOString().slice(0,10);
+      let 출고일str = 출고일.getFullYear()+'-'+String(출고일.getMonth()+1).padStart(2,'0')+'-'+String(출고일.getDate()).padStart(2,'0');
       const diff = businessDayDiff(출고일str, date);
       let ampm = diff <= 1 ? '오전' : '오후';
 
       if(출고일str < todayStr){
-        출고일str = todayStr;
+        const biz = new Date(today);
+        if(biz.getDay()===0) biz.setDate(biz.getDate()+1);
+        else if(biz.getDay()===6) biz.setDate(biz.getDate()+2);
+        출고일str = biz.getFullYear()+'-'+String(biz.getMonth()+1).padStart(2,'0')+'-'+String(biz.getDate()).padStart(2,'0');
         ampm = '오전';
       }
-
-      const 출고키 = 출고일str + '_' + ampm;
-      qtyByKey[출고키] = (qtyByKey[출고키]||0) + 출예;
+      dayPlan.push({date, 출예, 출고키: 출고일str+'_'+ampm, 출고일str, ampm});
     }
 
-    // 최대 3개 출고키만 사용
+    // 재고 흐름 재시뮬: 출고키순으로 생산 결정 후 이후 날짜 재고에 반영
+    const sortedPlanKeys = [...new Set(dayPlan.map(d=>d.출고키))].sort();
+    const qtyByKey = {};
+
+    // 날짜별 출예량 맵
+    const 출예맵 = {};
+    it.base.forEach(b => { 출예맵[b.date] = Number(b.출예)||0; });
+
+    // extras 포함한 현재 재고 시뮬 상태 복사
+    // 각 출고키 처리 시점에서 "이 출고일에 얼마 생산하면 D-day까지 버티나" 계산
+    // 방법: 출고키별 D-day 날짜들의 예량을 누적 생산분 반영해서 재계산
+    let 누적생산 = 0;
+
+    sortedPlanKeys.forEach(출고키 => {
+      const 해당Days = dayPlan.filter(d => d.출고키 === 출고키).sort((a,b)=>a.date.localeCompare(b.date));
+      // 이 출고키의 D-day 날짜들에서 누적생산 반영 후 부족량 합산
+      let 실부족 = 0;
+      해당Days.forEach(({date}) => {
+        const tlDay = tl.find(t => t.date === date);
+        if(!tlDay) return;
+        // 누적생산이 반영된 예량
+        const 보정예량 = tlDay.예량 + 누적생산;
+        if(보정예량 < 0) 실부족 += tlDay.출예; // 여전히 부족하면 출예만큼 필요
+      });
+      if(실부족 > 0){
+        qtyByKey[출고키] = 실부족;
+        누적생산 += 실부족; // 이 출고키에서 만든 분이 이후에 반영
+      }
+    });
+
+    // 출고키별로 byDate에 추가 (최대 3개)
     const sortedOutKeys = Object.keys(qtyByKey).sort().slice(0,3);
     sortedOutKeys.forEach(출고키 => {
       const [출고일str, ampm] = 출고키.split('_');
       const 출고일 = new Date(출고일str);
       if(!byDate[출고키]) byDate[출고키] = {'2층':[], '4층':[]};
-      byDate[출고키][floor].push({
-        code: it.code, name,
-        qty: Math.round(qtyByKey[출고키]),
-        출고일, ampm
-      });
+      const existing = byDate[출고키][floor].find(x => x.code === it.code);
+      if(existing){
+        existing.qty += Math.round(qtyByKey[출고키]);
+      } else {
+        byDate[출고키][floor].push({
+          code: it.code, name,
+          qty: Math.round(qtyByKey[출고키]),
+          출고일, ampm
+        });
+      }
     });
   });
 
